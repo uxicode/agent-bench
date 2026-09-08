@@ -35,17 +35,13 @@ export async function GET() {
     const models = (data.models ?? [])
       .map((item) => item.name ?? "")
       .filter(Boolean);
-    const isReady = models.includes(model);
 
     const payload: OllamaHealth = {
-      isReady,
-      hasError: !isReady,
+      isReady: true,
+      hasError: false,
       baseUrl,
       model,
       models,
-      errorMessage: isReady
-        ? undefined
-        : `모델 "${model}"이(가) 없습니다. ollama pull ${model}`,
     };
 
     return NextResponse.json(payload);

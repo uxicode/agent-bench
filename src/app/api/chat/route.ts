@@ -1,6 +1,6 @@
 import { createChatOllama } from "@/lib/ollama/client";
 import { getChunkText, toLangChainMessages } from "@/lib/ollama/messages";
-import { MESSAGE_ROLE } from "@/constants/ollama";
+import { isAllowedOllamaModel, MESSAGE_ROLE } from "@/constants/ollama";
 import type { ChatMessage, ChatRequestBody } from "@/types/chat";
 
 export const maxDuration = 120;
@@ -41,7 +41,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const model = createChatOllama();
+  if (body.model !== undefined && !isAllowedOllamaModel(body.model)) {
+    return Response.json(
+      { error: "허용되지 않은 모델입니다." },
+      { status: 400 },
+    );
+  }
+
+  const model = createChatOllama({
+    model: isAllowedOllamaModel(body.model) ? body.model : undefined,
+  });
   const stream = await model.stream(toLangChainMessages(messages));
   const encoder = new TextEncoder();
 

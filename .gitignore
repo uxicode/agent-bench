@@ -12,6 +12,11 @@
 
 # testing
 /coverage
+/runs
+
+# agent sandbox outputs
+/sandbox/tasks/*
+!/sandbox/tasks/.gitkeep
 
 # next.js
 /.next/

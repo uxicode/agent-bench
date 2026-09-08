@@ -1,5 +1,5 @@
-import { ChatPlayground } from "@/components/chat-playground/ChatPlayground";
+import { Playground } from "@/components/playground/Playground";
 
 export default function Home() {
-  return <ChatPlayground />;
+  return <Playground />;
 }
