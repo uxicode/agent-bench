@@ -4,20 +4,17 @@ export const AGENT_READ_FILE_MAX_BYTES = 64 * 1024;
 export const AGENT_MAX_FILES = 3;
 export const AGENT_STACK_LINES = 8;
 export const AGENT_TEMPERATURE = 0.3;
+export const REVIEW_ANALYZER_TEMPERATURE = 0.2;
+export const REVIEW_REPORTER_TEMPERATURE = 0.4;
 export const AGENT_STDOUT_EXCERPT_BYTES = 4 * 1024;
 
 export const AGENT_STATUS = {
   idle: "Idle",
-  preparingWorkspace: "PreparingWorkspace",
-  writingTests: "WritingTests",
-  lockingTests: "LockingTests",
-  writingImpl: "WritingImpl",
-  runningTests: "RunningTests",
-  analyzingFailure: "AnalyzingFailure",
-  patchingImpl: "PatchingImpl",
+  loadingSource: "LoadingSource",
+  analyzingCode: "AnalyzingCode",
+  unloadingModel: "UnloadingModel",
+  writingReport: "WritingReport",
   succeeded: "Succeeded",
-  failedMaxAttempts: "FailedMaxAttempts",
-  failedPolicy: "FailedPolicy",
   failedInfra: "FailedInfra",
 } as const;
 
@@ -25,31 +22,48 @@ export type AgentStatus = (typeof AGENT_STATUS)[keyof typeof AGENT_STATUS];
 
 export const AGENT_STATUS_LABEL = {
   Idle: "대기",
-  PreparingWorkspace: "작업 공간 준비",
-  WritingTests: "테스트 작성",
-  LockingTests: "잠금",
-  WritingImpl: "코드 변환",
-  RunningTests: "테스트 실행",
-  AnalyzingFailure: "실패 분석",
-  PatchingImpl: "코드 수정",
+  LoadingSource: "소스 로드",
+  AnalyzingCode: "기술 분석",
+  UnloadingModel: "모델 언로드",
+  WritingReport: "리포트 작성",
   Succeeded: "성공",
-  FailedMaxAttempts: "시도 횟수 초과",
-  FailedPolicy: "정책 실패",
   FailedInfra: "인프라 실패",
 } as const;
 
+export const AGENT_CONNECTION_STATE = {
+  idle: "idle",
+  connecting: "connecting",
+  streaming: "streaming",
+  completed: "completed",
+  failed: "failed",
+} as const;
+
+export type AgentConnectionState =
+  (typeof AGENT_CONNECTION_STATE)[keyof typeof AGENT_CONNECTION_STATE];
+
+export const AGENT_CONNECTION_LABEL = {
+  idle: "대기",
+  connecting: "연결 중",
+  streaming: "스트림 수신",
+  completed: "완료",
+  failed: "연결 실패",
+} as const;
+
+export const REVIEW_PIPELINE_STEPS = [
+  { status: AGENT_STATUS.loadingSource, label: "소스" },
+  { status: AGENT_STATUS.analyzingCode, label: "분석" },
+  { status: AGENT_STATUS.unloadingModel, label: "언로드" },
+  { status: AGENT_STATUS.writingReport, label: "리포트" },
+] as const;
+
 export const AGENT_ACTION = {
-  test: "test",
-  optimize: "optimize",
-  refactor: "refactor",
+  review: "review",
 } as const;
 
 export type AgentAction = (typeof AGENT_ACTION)[keyof typeof AGENT_ACTION];
 
 export const AGENT_ACTION_LABEL = {
-  test: "테스트",
-  optimize: "최적화",
-  refactor: "리팩터링",
+  review: "코드리뷰",
 } as const;
 
 export const AGENT_SOURCE_KIND = {

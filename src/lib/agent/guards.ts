@@ -45,6 +45,18 @@ export function isForbiddenAppPath(relativePath: string): boolean {
   );
 }
 
+const BLOCKED_SEGMENTS = new Set(["node_modules", ".git", ".next", "runs"]);
+
+const BLOCKED_SYSTEM_PREFIXES = [
+  "/etc/",
+  "/sys/",
+  "/proc/",
+  "/dev/",
+  "/bin/",
+  "/sbin/",
+  "/private/etc/",
+];
+
 export function isForbiddenRepoPath(relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath);
   return FORBIDDEN_REPO_PREFIXES.some(
@@ -55,22 +67,47 @@ export function isForbiddenRepoPath(relativePath: string): boolean {
   );
 }
 
-export function resolveRepoPath(relativePath: string): string {
-  if (!relativePath || relativePath.includes("\0"))
+export function hasBlockedPathSegment(inputPath: string): boolean {
+  const normalized = inputPath.replace(/\\/g, "/");
+  return normalized
+    .split("/")
+    .filter(Boolean)
+    .some((segment) => BLOCKED_SEGMENTS.has(segment));
+}
+
+export function isBlockedSystemPath(resolvedPath: string): boolean {
+  const normalized = resolvedPath.replace(/\\/g, "/");
+  return BLOCKED_SYSTEM_PREFIXES.some(
+    (prefix) =>
+      normalized === prefix.slice(0, -1) || normalized.startsWith(prefix),
+  );
+}
+
+export function resolveRepoPath(inputPath: string): string {
+  if (!inputPath || inputPath.includes("\0"))
     throw new Error("경로가 올바르지 않습니다.");
 
-  if (path.isAbsolute(relativePath))
-    throw new Error("절대 경로는 허용되지 않습니다.");
+  const trimmed = inputPath.trim();
+  if (isEnvPath(trimmed))
+    throw new Error(".env 파일은 읽을 수 없습니다.");
 
-  const normalized = normalizeRelativePath(relativePath);
+  if (path.isAbsolute(trimmed)) {
+    const resolved = path.resolve(trimmed);
+    if (isEnvPath(resolved))
+      throw new Error(".env 파일은 읽을 수 없습니다.");
+    if (hasBlockedPathSegment(resolved))
+      throw new Error("해당 경로는 허용되지 않습니다.");
+    if (isBlockedSystemPath(resolved))
+      throw new Error("시스템 경로는 허용되지 않습니다.");
+    return resolved;
+  }
+
+  const normalized = normalizeRelativePath(trimmed);
   if (!normalized)
     throw new Error("경로가 올바르지 않습니다.");
 
   if (normalized.split("/").some((part) => part === ".." || part === ""))
     throw new Error("경로 탈출은 허용되지 않습니다.");
-
-  if (isEnvPath(normalized))
-    throw new Error(".env 파일은 읽을 수 없습니다.");
 
   if (isForbiddenRepoPath(normalized))
     throw new Error("해당 경로는 허용되지 않습니다.");
@@ -80,7 +117,7 @@ export function resolveRepoPath(relativePath: string): string {
   const relative = path.relative(repoRoot, resolved);
 
   if (relative.startsWith("..") || path.isAbsolute(relative))
-    throw new Error("저장소 밖 경로는 허용되지 않습니다.");
+    throw new Error("저장소 밖 상대 경로는 허용되지 않습니다.");
 
   return resolved;
 }

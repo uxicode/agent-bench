@@ -3,14 +3,14 @@ import type {
   AgentSourceKind,
   AgentStatus,
   PatchStrategy,
-  RunTestCommand,
 } from "@/constants/agent";
 
 export interface AgentRunRequest {
-  action: AgentAction;
+  action?: AgentAction;
   sourceKind: AgentSourceKind;
   code?: string;
   path?: string;
+  filename?: string;
   instruction?: string;
   taskId?: string;
 }
@@ -33,8 +33,23 @@ export interface AgentTimelineEvent {
 
 export interface AgentFileDiff {
   path: string;
+  displayPath?: string;
   before: string;
   after: string;
+}
+
+export interface CodeAnalysisFinding {
+  severity: "high" | "medium" | "low";
+  title: string;
+  detail: string;
+  location?: string;
+}
+
+export interface CodeAnalysisNotes {
+  summary: string;
+  findings: CodeAnalysisFinding[];
+  risks: string[];
+  suggestions: string[];
 }
 
 export interface AgentRunResponse {
@@ -45,6 +60,8 @@ export interface AgentRunResponse {
   timeline: AgentTimelineEvent[];
   stdoutExcerpt: string;
   diff: AgentFileDiff[];
+  report?: string;
+  analysis?: CodeAnalysisNotes;
   errorMessage?: string;
 }
 
@@ -65,10 +82,75 @@ export interface AgentLoopInput {
   sourceKind: AgentSourceKind;
   code?: string;
   path?: string;
+  filename?: string;
   instruction?: string;
   taskId: string;
-  maxAttempts?: number;
+  signal?: AbortSignal;
 }
+
+export interface ReviewPipelineInput {
+  filename: string;
+  sourceCode: string;
+  instruction?: string;
+}
+
+export interface ReviewPipelineResult {
+  analysis: CodeAnalysisNotes;
+  report: string;
+}
+
+export interface ReviewPipelineDeps {
+  analyzer?: ReviewModelClient;
+  reporter?: ReviewModelClient;
+  unloadModel?: (model: string) => Promise<void>;
+}
+
+export interface ReviewModelClient {
+  invoke(messages: { role: string; content: string }[]): Promise<string>;
+}
+
+export interface AgentLoopDeps {
+  runReview?: (input: ReviewPipelineInput) => Promise<ReviewPipelineResult>;
+  onEvent?: (event: AgentTimelineEvent) => void;
+}
+
+export const AGENT_STREAM_EVENT = {
+  connection: "connection",
+  log: "log",
+  result: "result",
+  error: "error",
+} as const;
+
+export type AgentStreamEventType =
+  (typeof AGENT_STREAM_EVENT)[keyof typeof AGENT_STREAM_EVENT];
+
+export interface AgentConnectionStreamEvent {
+  type: "connection";
+  state: "connecting" | "streaming" | "completed" | "failed";
+  message: string;
+  ollamaBaseUrl?: string;
+}
+
+export interface AgentLogStreamEvent {
+  type: "log";
+  event: AgentTimelineEvent;
+}
+
+export interface AgentResultStreamEvent {
+  type: "result";
+  result: AgentRunResponse;
+}
+
+export interface AgentErrorStreamEvent {
+  type: "error";
+  error: string;
+}
+
+export type AgentRunStreamEvent =
+  | AgentConnectionStreamEvent
+  | AgentLogStreamEvent
+  | AgentResultStreamEvent
+  | AgentErrorStreamEvent;
 
 export interface TestLock {
   hashes: Record<string, string>;
@@ -88,16 +170,4 @@ export interface RunTestsResult {
 export interface ApplyPatchResult {
   applied: string[];
   rejectedReason?: string;
-}
-
-export interface AgentModelClient {
-  invoke(messages: { role: string; content: string }[]): Promise<string>;
-}
-
-export interface AgentLoopDeps {
-  modelClient?: AgentModelClient;
-  runTestsFn?: (
-    taskId: string,
-    command?: RunTestCommand,
-  ) => Promise<RunTestsResult>;
 }

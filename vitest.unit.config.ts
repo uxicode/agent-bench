@@ -8,7 +8,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/lib/agent/**/*.test.ts"],
+    include: ["src/lib/**/*.test.ts"],
     exclude: ["node_modules", "sandbox/**"],
     passWithNoTests: true,
   },

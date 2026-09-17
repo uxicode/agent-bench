@@ -23,9 +23,11 @@ npm run dev
 [http://localhost:3000](http://localhost:3000)에서 Chat과 Agent 탭을 사용할 수 있습니다.
 
 - **Chat**: 로컬 모델과 스트리밍 대화
-- **Agent**: 코드 또는 파일 경로를 넣고 테스트 / 최적화 / 리팩터링 (`POST /api/agent/run`)
+- **Agent**: 코드 또는 파일 경로를 넣고 코드리뷰 (`POST /api/agent/run`). `qwen2.5-coder:7b`가 기술 분석을 끝낸 뒤 `keep_alive: 0`으로 언로드되고, `gemma2:9b`가 LangChain `RunnableSequence`로 최종 리포트를 작성합니다. 파일은 경로 입력, 파일 열기, 드래그 앤 드롭으로 추가할 수 있고 다른 프로젝트의 절대 경로도 허용합니다.
 
-결과는 `runs/`에 저장되며 gitignore 됩니다. 경로 모드에서 성공하면 원본 파일(최적화·리팩터링)과 형제 `*.test.ts`에 반영합니다.
+Chat·Agent 모두 응답이 2분을 넘기면 경고와 함께 모델 호출과 API 연결을 끊습니다.
+
+결과는 `runs/`에 저장되며 gitignore 됩니다. 브라우저 파일 선택만으로는 실제 경로를 알 수 없어 내용으로 실행됩니다.
 
 ```bash
 npm run test:unit    # 가드/lock/allowlist 단위 테스트
@@ -45,10 +47,10 @@ npm test             # sandbox 과제 테스트만
 ```text
 src/
   app/api/chat/route.ts     LangChain ChatOllama 스트리밍
-  app/api/agent/run/route.ts  자가 치유 코딩 루프
+  app/api/agent/run/route.ts  코드리뷰 Sequential Pipeline
   app/api/health/route.ts   Ollama 연결/모델 확인
-  lib/ollama/               ChatOllama 팩토리, 메시지 변환
-  lib/agent/                샌드박스 도구, 가드, 상태머신
+  lib/ollama/               ChatOllama 팩토리, keep_alive 언로드
+  lib/agent/                코드리뷰 파이프라인, 가드
   constants/ollama.ts       기본값, role map
   types/chat.ts             요청/헬스 타입
 ```

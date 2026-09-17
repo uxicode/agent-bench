@@ -8,18 +8,21 @@ import {
 } from "@/constants/agent";
 import { isRunTestCommand, resolveRunTestsArgv } from "@/lib/agent/allowlist";
 import { getRepoRoot } from "@/lib/agent/guards";
+import { throwIfAborted } from "@/lib/ollama/timeout";
 import type { RunTestsResult } from "@/types/agent";
 
 export async function runTests(
   taskId: string,
   command: RunTestCommand = RUN_TEST_COMMAND.vitest,
+  signal?: AbortSignal,
 ): Promise<RunTestsResult> {
   if (!isRunTestCommand(command))
     throw new Error("허용되지 않은 테스트 명령입니다.");
 
+  throwIfAborted(signal);
   const argv = resolveRunTestsArgv(command, taskId);
   const [file, ...args] = argv;
-  const output = await spawnAllowlisted(file, args);
+  const output = await spawnAllowlisted(file, args, signal);
   const stdoutExcerpt = excerptOutput(output.text);
   const { failMessage, stackExcerpt } = extractFailBlocks(output.text);
 
@@ -36,8 +39,17 @@ interface SpawnOutput {
   text: string;
 }
 
-function spawnAllowlisted(file: string, args: string[]): Promise<SpawnOutput> {
+function spawnAllowlisted(
+  file: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<SpawnOutput> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("aborted"));
+      return;
+    }
+
     const child = spawn(file, args, {
       cwd: getRepoRoot(),
       shell: false,
@@ -49,6 +61,11 @@ function spawnAllowlisted(file: string, args: string[]): Promise<SpawnOutput> {
       },
     });
 
+    const onAbort = () => {
+      child.kill("SIGTERM");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
     let text = "";
     child.stdout.on("data", (chunk: Buffer) => {
       text += chunk.toString("utf8");
@@ -58,6 +75,11 @@ function spawnAllowlisted(file: string, args: string[]): Promise<SpawnOutput> {
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (signal?.aborted) {
+        reject(new Error("aborted"));
+        return;
+      }
       resolve({ exitCode: code ?? 1, text });
     });
   });

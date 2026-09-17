@@ -1,6 +1,19 @@
 import { createChatOllama } from "@/lib/ollama/client";
 import { getChunkText, toLangChainMessages } from "@/lib/ollama/messages";
-import { isAllowedOllamaModel, MESSAGE_ROLE } from "@/constants/ollama";
+import {
+  CHAT_ORCHESTRATION_MODELS,
+  isAllowedOllamaModel,
+  MESSAGE_ROLE,
+} from "@/constants/ollama";
+import {
+  MODEL_RUN_TIMEOUT_MESSAGE,
+  MODEL_RUN_TIMEOUT_MS,
+} from "@/constants/timeout";
+import { createChatOrchestration } from "@/lib/chat/orchestrate";
+import {
+  createDeadlineSignal,
+  isDeadlineAbort,
+} from "@/lib/ollama/timeout";
 import type { ChatMessage, ChatRequestBody } from "@/types/chat";
 
 export const maxDuration = 120;
@@ -48,30 +61,70 @@ export async function POST(request: Request) {
     );
   }
 
-  const model = createChatOllama({
-    model: isAllowedOllamaModel(body.model) ? body.model : undefined,
+  const workerModel = isAllowedOllamaModel(body.model)
+    ? body.model
+    : CHAT_ORCHESTRATION_MODELS.worker;
+  const signal = createDeadlineSignal(MODEL_RUN_TIMEOUT_MS, request.signal);
+  const orchestrator = createChatOrchestration({
+    plannerModel: CHAT_ORCHESTRATION_MODELS.planner,
+    workerModel,
+    signal,
   });
-  const stream = await model.stream(toLangChainMessages(messages));
-  const encoder = new TextEncoder();
 
-  const readable = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of stream) {
-          const text = getChunkText(chunk.content);
-          if (text) controller.enqueue(encoder.encode(text));
+  try {
+    const planned = await orchestrator.invoke({ messages });
+    const model = createChatOllama({ model: workerModel }, signal);
+    const stream = await model.stream(
+      toLangChainMessages(planned.answerMessages),
+      { signal },
+    );
+    const encoder = new TextEncoder();
+
+    const readable = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const chunk of stream) {
+            if (signal.aborted) break;
+            const text = getChunkText(chunk.content);
+            if (text) controller.enqueue(encoder.encode(text));
+          }
+
+          if (signal.aborted)
+            controller.enqueue(encoder.encode(`\n\n${MODEL_RUN_TIMEOUT_MESSAGE}`));
+
+          controller.close();
+        } catch (error) {
+          if (isDeadlineAbort(error, signal)) {
+            controller.enqueue(encoder.encode(`\n\n${MODEL_RUN_TIMEOUT_MESSAGE}`));
+            controller.close();
+            return;
+          }
+          controller.error(error);
         }
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-  });
+      },
+    });
 
-  return new Response(readable, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-    },
-  });
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+      },
+    });
+  } catch (error) {
+    if (isDeadlineAbort(error, signal))
+      return Response.json(
+        { error: MODEL_RUN_TIMEOUT_MESSAGE },
+        { status: 504 },
+      );
+
+    return Response.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "채팅 요청에 실패했습니다.",
+      },
+      { status: 500 },
+    );
+  }
 }

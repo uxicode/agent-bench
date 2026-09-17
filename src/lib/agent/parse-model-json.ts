@@ -43,7 +43,7 @@ function toFilePatch(file: unknown): AgentPatchPayload["files"][number] {
   return { path: item.path, content: item.content };
 }
 
-function extractJsonObject(text: string): string {
+export function extractJsonObject(text: string): string {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const body = (fenced?.[1] ?? trimmed).trim();

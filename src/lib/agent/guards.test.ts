@@ -49,4 +49,16 @@ describe("guards", () => {
     const resolved = resolveRepoPath("src/lib/agent/error-hash.ts");
     expect(resolved.endsWith(path.join("src", "lib", "agent", "error-hash.ts"))).toBe(true);
   });
+
+  it("다른 프로젝트의 절대 경로는 허용한다", () => {
+    const absPath = "/Users/me/other-project/src/utils.ts";
+    expect(resolveRepoPath(absPath)).toBe(path.resolve(absPath));
+  });
+
+  it("시스템·차단 세그먼트 절대 경로는 거부한다", () => {
+    expect(() => resolveRepoPath("/etc/passwd")).toThrow(/시스템/);
+    expect(() =>
+      resolveRepoPath("/Users/me/proj/node_modules/vitest/index.js"),
+    ).toThrow(/허용되지 않습니다/);
+  });
 });

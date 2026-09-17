@@ -1,100 +1,125 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { AGENT_ACTION, AGENT_SOURCE_KIND, AGENT_STATUS } from "@/constants/agent";
-import { getSandboxTaskDir, resolveSandboxPath } from "@/lib/agent/guards";
+import { MODEL_RUN_TIMEOUT_MESSAGE } from "@/constants/timeout";
 import { runAgentLoop } from "@/lib/agent/loop";
-import type { AgentModelClient } from "@/types/agent";
+import type { ReviewPipelineResult } from "@/types/agent";
 
 const TASK_ID = "unit-loop";
-
-afterEach(async () => {
-  await rm(getSandboxTaskDir(TASK_ID), { recursive: true, force: true });
-  await rm(getSandboxTaskDir(`${TASK_ID}-policy`), {
-    recursive: true,
-    force: true,
-  });
-});
-
-function jsonFiles(files: { path: string; content: string }[]): string {
-  return JSON.stringify({ files });
-}
-
 const ADD_CODE = "export function add(a: number, b: number) { return a + b; }";
 
-describe("runAgentLoop", () => {
-  it("붙여넣은 코드에 테스트를 쓰면 성공한다", async () => {
-    const replies = [
-      jsonFiles([
-        {
-          path: "src/add.test.ts",
-          content: `import { describe, expect, it } from "vitest";
-import { add } from "./add";
-describe("add", () => {
-  it("sums", () => expect(add(1, 2)).toBe(3));
-});`,
-        },
-      ]),
-    ];
-    const modelClient: AgentModelClient = {
-      async invoke() {
-        return replies.shift() ?? "{}";
-      },
-    };
+const REVIEW: ReviewPipelineResult = {
+  analysis: {
+    summary: "단순 덧셈 함수",
+    findings: [],
+    risks: [],
+    suggestions: ["테스트 추가"],
+  },
+  report: "## 결론\n문제 없습니다.",
+};
 
+let tempDir = "";
+
+afterEach(async () => {
+  if (tempDir) {
+    await rm(tempDir, { recursive: true, force: true });
+    tempDir = "";
+  }
+});
+
+describe("runAgentLoop", () => {
+  it("코드리뷰 파이프라인이 리포트를 반환한다", async () => {
     const result = await runAgentLoop(
       {
-        action: AGENT_ACTION.test,
+        action: AGENT_ACTION.review,
         sourceKind: AGENT_SOURCE_KIND.code,
         code: ADD_CODE,
         taskId: TASK_ID,
-        maxAttempts: 2,
       },
-      { modelClient },
+      { runReview: async () => REVIEW },
     );
 
     expect(result.status).toBe(AGENT_STATUS.succeeded);
-    expect(result.attempts).toBe(1);
+    expect(result.attempts).toBe(2);
+    expect(result.report).toBe(REVIEW.report);
+    expect(result.analysis).toEqual(REVIEW.analysis);
+    expect(
+      result.timeline.some((event) => event.status === AGENT_STATUS.loadingSource),
+    ).toBe(true);
+    expect(
+      result.timeline.some((event) => event.status === AGENT_STATUS.succeeded),
+    ).toBe(true);
   });
 
-  it("잠긴 테스트 해시가 바뀌면 FailedPolicy가 된다", async () => {
-    const taskId = `${TASK_ID}-policy`;
-    const replies = [
-      jsonFiles([{ path: "src/add.test.ts", content: "expect(1).toBe(1)" }]),
-      jsonFiles([{ path: "src/add.ts", content: "export const add = () => 1" }]),
-      jsonFiles([{ path: "src/add.ts", content: "export const add = () => 2" }]),
-    ];
-    const modelClient: AgentModelClient = {
-      async invoke() {
-        return replies.shift() ?? jsonFiles([]);
-      },
-    };
-
-    const result = await runAgentLoop(
+  it("단계가 바뀔 때마다 onEvent를 호출한다", async () => {
+    const events: string[] = [];
+    await runAgentLoop(
       {
-        action: AGENT_ACTION.optimize,
+        action: AGENT_ACTION.review,
         sourceKind: AGENT_SOURCE_KIND.code,
         code: ADD_CODE,
-        taskId,
-        maxAttempts: 2,
+        taskId: `${TASK_ID}-events`,
       },
       {
-        modelClient,
-        runTestsFn: async () => {
-          await writeFile(
-            resolveSandboxPath(taskId, "src/add.test.ts"),
-            "tampered",
-            "utf8",
-          );
-          return {
-            ok: false,
-            stdoutExcerpt: "FAIL",
-            failMessage: "fail",
-            stackExcerpt: "at x",
-          };
+        runReview: async () => REVIEW,
+        onEvent(event) {
+          events.push(event.status);
         },
       },
     );
 
-    expect(result.status).toBe(AGENT_STATUS.failedPolicy);
+    expect(events).toEqual([AGENT_STATUS.loadingSource, AGENT_STATUS.succeeded]);
+  });
+
+  it("경로 모드에서 파일을 읽어 리뷰한다", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-review-"));
+    const filePath = path.join(tempDir, "add.ts");
+    await writeFile(filePath, ADD_CODE, "utf8");
+
+    let received = "";
+    const result = await runAgentLoop(
+      {
+        action: AGENT_ACTION.review,
+        sourceKind: AGENT_SOURCE_KIND.path,
+        path: filePath,
+        taskId: `${TASK_ID}-path`,
+      },
+      {
+        runReview: async (input) => {
+          received = input.sourceCode;
+          expect(input.filename).toBe("add.ts");
+          return REVIEW;
+        },
+      },
+    );
+
+    expect(result.status).toBe(AGENT_STATUS.succeeded);
+    expect(received).toBe(ADD_CODE);
+  });
+
+  it("이미 abort된 시그널이면 모델 호출 없이 중단한다", async () => {
+    let called = false;
+    const result = await runAgentLoop(
+      {
+        action: AGENT_ACTION.review,
+        sourceKind: AGENT_SOURCE_KIND.code,
+        code: ADD_CODE,
+        taskId: `${TASK_ID}-timeout`,
+        signal: AbortSignal.abort(),
+      },
+      {
+        runReview: async () => {
+          called = true;
+          return REVIEW;
+        },
+      },
+    );
+
+    expect(called).toBe(false);
+    expect(result.status).toBe(AGENT_STATUS.failedInfra);
+    expect(result.attempts).toBe(0);
+    expect(result.errorMessage).toBe(MODEL_RUN_TIMEOUT_MESSAGE);
   });
 });

@@ -11,6 +11,18 @@ export type OllamaModelName = (typeof OLLAMA_MODELS)[keyof typeof OLLAMA_MODELS]
 
 export const DEFAULT_OLLAMA_MODEL = OLLAMA_MODELS.gemma2;
 
+export const OLLAMA_KEEP_ALIVE_UNLOAD = 0;
+
+export const REVIEW_PIPELINE_MODELS = {
+  analyzer: OLLAMA_MODELS.qwen25Coder,
+  reporter: OLLAMA_MODELS.gemma2,
+} as const;
+
+export const CHAT_ORCHESTRATION_MODELS = {
+  planner: OLLAMA_MODELS.qwen25Coder,
+  worker: OLLAMA_MODELS.gemma2,
+} as const;
+
 export const OLLAMA_MODEL_OPTIONS = Object.values(OLLAMA_MODELS);
 
 export const MESSAGE_ROLE = {
@@ -35,4 +47,11 @@ export function isOllamaModelInstalled(
     if (model.includes(":")) return false;
     return installed === `${model}:latest` || installed.startsWith(`${model}:`);
   });
+}
+
+export function missingReviewPipelineModels(installedModels: string[]): string[] {
+  return [
+    REVIEW_PIPELINE_MODELS.analyzer,
+    REVIEW_PIPELINE_MODELS.reporter,
+  ].filter((model) => !isOllamaModelInstalled(installedModels, model));
 }

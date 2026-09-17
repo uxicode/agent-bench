@@ -3,7 +3,7 @@ import path from "node:path";
 import { AGENT_READ_FILE_MAX_BYTES } from "@/constants/agent";
 import { resolveRepoPath } from "@/lib/agent/guards";
 import {
-  inferFilename,
+  resolveSourceFilename,
   sandboxImplPath,
   sandboxTestPath,
   toSiblingTestPath,
@@ -25,11 +25,12 @@ export async function seedWorkspace(input: {
   sourceKind: AgentSourceKind;
   code?: string;
   path?: string;
+  filename?: string;
 }): Promise<SeededWorkspace> {
   if (input.sourceKind === "path") {
     const originalPath = input.path?.trim() ?? "";
     const sourceCode = await readRepoFile(originalPath);
-    const filename = path.posix.basename(originalPath);
+    const filename = path.posix.basename(originalPath.replace(/\\/g, "/"));
     const implPath = sandboxImplPath(filename);
     const testPath = sandboxTestPath(filename);
     await applyPatch(input.taskId, {
@@ -58,7 +59,7 @@ export async function seedWorkspace(input: {
 
   const sourceCode = input.code?.trim() ?? "";
   if (!sourceCode) throw new Error("코드가 비어 있습니다.");
-  const filename = inferFilename(sourceCode);
+  const filename = resolveSourceFilename(input.filename, sourceCode);
   const implPath = sandboxImplPath(filename);
   const testPath = sandboxTestPath(filename);
   await applyPatch(input.taskId, {

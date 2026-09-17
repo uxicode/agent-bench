@@ -10,11 +10,17 @@ import {
   OLLAMA_MODELS,
   type OllamaModelName,
 } from "@/constants/ollama";
+import {
+  MODEL_RUN_TIMEOUT_MESSAGE,
+  MODEL_RUN_TIMEOUT_MS,
+} from "@/constants/timeout";
+import { isAbortError } from "@/lib/ollama/timeout";
 import type { ChatMessage, OllamaHealth } from "@/types/chat";
 
 interface ChatPlaygroundProps {
   showChrome?: boolean;
   health?: OllamaHealth | null;
+  selectedModel?: OllamaModelName;
 }
 
 /**
@@ -24,13 +30,16 @@ interface ChatPlaygroundProps {
 export function ChatPlayground({
   showChrome = true,
   health: healthProp,
+  selectedModel: selectedModelProp,
 }: ChatPlaygroundProps) {
   /** 지금까지 주고받은 대화 목록 */
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   /** 이번 요청에 사용할 Ollama 모델 */
-  const [selectedModel, setSelectedModel] = useState<OllamaModelName>(
+  const [internalModel, setInternalModel] = useState<OllamaModelName>(
     DEFAULT_OLLAMA_MODEL,
   );
+  const selectedModel = selectedModelProp ?? internalModel;
+  const isModelControlled = selectedModelProp !== undefined;
   /** 입력창에 작성 중인 텍스트 */
   const [input, setInput] = useState("");
   /** 모델 응답 스트리밍 진행 여부 */
@@ -116,11 +125,16 @@ export function ChatPlayground({
       { role: MESSAGE_ROLE.assistant, content: "" },
     ]);
 
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), MODEL_RUN_TIMEOUT_MS);
+    let assistantContent = "";
+
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: nextMessages, model: selectedModel }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -132,7 +146,6 @@ export function ChatPlayground({
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let assistantContent = "";
 
       // ReadableStream 청크를 디코드하며 assistant 메시지를 갱신한다.
       while (true) {
@@ -145,21 +158,30 @@ export function ChatPlayground({
           { role: MESSAGE_ROLE.assistant, content: assistantContent },
         ]);
       }
+
+      if (assistantContent.includes(MODEL_RUN_TIMEOUT_MESSAGE)) {
+        setHasError(true);
+        setErrorMessage(MODEL_RUN_TIMEOUT_MESSAGE);
+      }
     } catch (error) {
       setHasError(true);
       setErrorMessage(
-        error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.",
+        isAbortError(error)
+          ? MODEL_RUN_TIMEOUT_MESSAGE
+          : error instanceof Error
+            ? error.message
+            : "알 수 없는 오류가 발생했습니다.",
       );
-      // 실패한 assistant 버블은 제거하고 사용자 메시지만 남긴다.
-      setMessages(nextMessages);
+      if (!assistantContent) setMessages(nextMessages);
     } finally {
+      window.clearTimeout(timer);
       setIsLoading(false);
     }
   }
 
   const chatBody = (
     <>
-        {!showChrome ? (
+        {!showChrome && !isModelControlled ? (
           <p
             className={`mb-4 inline-flex w-fit rounded-full px-3 py-1 text-xs font-medium ${
               health?.isReady && isSelectedModelInstalled
@@ -177,7 +199,8 @@ export function ChatPlayground({
         >
           {messages.length === 0 ? (
             <p className="text-sm text-zinc-500">
-              메시지를 보내면 {selectedModel}이(가) 응답합니다.
+              메시지를 보내면 qwen2.5-coder:7b가 바로 답할지 나눌지 고르고,
+              {" "}{selectedModel}이(가) 답합니다.
             </p>
           ) : (
             messages.map((message, index) => (
@@ -203,30 +226,36 @@ export function ChatPlayground({
 
         {/* 모델 선택, 메시지 입력 및 전송 */}
         <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-3">
-          <label className="flex flex-col gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-            모델
-            <select
-              value={selectedModel}
-              onChange={(event) => {
-                if (isAllowedOllamaModel(event.target.value))
-                  setSelectedModel(event.target.value);
-              }}
-              disabled={isLoading}
-              className="h-11 rounded-full border border-black/[.08] bg-white px-4 text-sm text-zinc-900 outline-none focus:border-zinc-400 dark:border-white/[.12] dark:bg-zinc-950 dark:text-zinc-100"
-            >
-              {OLLAMA_MODEL_OPTIONS.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!isModelControlled ? (
+            <label className="flex flex-col gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+              모델
+              <select
+                value={selectedModel}
+                onChange={(event) => {
+                  if (isAllowedOllamaModel(event.target.value))
+                    setInternalModel(event.target.value);
+                }}
+                disabled={isLoading}
+                className="h-11 rounded-full border border-black/[.08] bg-white px-4 text-sm text-zinc-900 outline-none focus:border-zinc-400 dark:border-white/[.12] dark:bg-zinc-950 dark:text-zinc-100"
+              >
+                {OLLAMA_MODEL_OPTIONS.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {isEmbedModel ? (
             <p className="text-xs text-amber-700 dark:text-amber-300">
               nomic-embed-text는 임베딩 모델입니다. 채팅 응답이 실패할 수
               있습니다.
             </p>
           ) : null}
+          <p className="text-xs text-zinc-500">
+            간단한 질문은 바로 답하고, 복잡한 질문은 3개로 나눠 순차 답한 뒤
+            합칩니다. 응답이 2분을 넘기면 자동으로 중단됩니다.
+          </p>
           <div className="flex gap-3">
             <input
               value={input}

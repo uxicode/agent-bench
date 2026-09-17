@@ -1,106 +1,71 @@
-import {
-  AGENT_ACTION,
-  type AgentAction,
-  type PatchStrategy,
-} from "@/constants/agent";
+import { REVIEW_PIPELINE_MODELS } from "@/constants/ollama";
+import type { ReviewPipelineInput } from "@/types/agent";
 
-export function buildSystemPrompt(): string {
-  return `당신은 로컬 TypeScript 코딩 에이전트입니다.
-반드시 JSON만 출력하세요. 설명 문장은 쓰지 마세요.
+export function buildAnalysisSystemPrompt(): string {
+  return `당신은 TypeScript/JavaScript 코드의 기술 분석가입니다.
+반드시 JSON만 출력하세요. 설명 문장, 마크다운, 코드펜스는 쓰지 마세요.
 형식:
-{"files":[{"path":"src/example.ts","content":"...전체 파일..."}]}
+{"summary":"한 줄 요약","findings":[{"severity":"high|medium|low","title":"제목","detail":"근거","location":"심볼 또는 줄"}],"risks":["위험"],"suggestions":["개선 제안"]}
 
 규칙:
-- path는 sandbox 상대 경로입니다. 이미 있는 src/*.ts 파일명만 사용하세요.
-- 파일은 구현 1개 + 테스트 1개만 다루세요.
-- 테스트는 vitest (describe/it/expect)를 사용하세요.
-- 외부 패키지와 실제 네트워크 호출은 금지입니다.
-- import는 상대 경로와 vitest만 사용하세요.`;
+- 코드를 수정하거나 다시 작성하지 마세요. 분석만 하세요.
+- 공개 API, 복잡도, 버그 가능성, 보안, 성능, 테스트 공백을 우선하세요.
+- 근거가 없는 지적은 넣지 마세요.
+- location은 함수명이나 대략적인 위치만 적어도 됩니다.`;
 }
 
-export function buildWriteTestsPrompt(input: {
-  action: AgentAction;
-  sourceCode: string;
-  implPath: string;
-  testPath: string;
-  instruction?: string;
-}): string {
-  const goal =
-    input.action === AGENT_ACTION.test
-      ? "이 코드의 동작을 검증하는 테스트를 작성하세요. 구현 파일은 수정하지 마세요."
-      : "이 코드의 현재 동작을 고정하는 특성화 테스트를 작성하세요. 이후 최적화/리팩터링이 동작을 바꾸지 못하게 잠급니다. 구현 파일은 수정하지 마세요.";
-
-  return `${goal}
-
-대상 파일: ${input.implPath}
-테스트 파일: ${input.testPath}
+export function buildAnalysisUserPrompt(input: ReviewPipelineInput): string {
+  return `파일: ${input.filename}
 ${input.instruction ? `\n추가 지시:\n${input.instruction}\n` : ""}
 코드:
 \`\`\`ts
 ${input.sourceCode}
 \`\`\`
 
-테스트 파일만 JSON files 배열로 출력하세요.`;
+기술 분석 JSON만 출력하세요.`;
 }
 
-export function buildTransformPrompt(input: {
-  action: AgentAction;
+export function buildReportSystemPrompt(): string {
+  return `당신은 시니어 엔지니어에게 전달할 코드리뷰 리포트를 작성합니다.
+한국어 마크다운만 출력하세요. JSON은 쓰지 마세요.
+
+구성:
+1. 한 줄 결론
+2. 핵심 이슈 (심각도 순)
+3. 리스크
+4. 개선 제안
+5. 남은 질문
+
+규칙:
+- 앞 단계의 기술 분석을 근거로 쓰되, 그대로 복붙하지 말고 읽기 쉽게 재구성하세요.
+- 전체 코드를 다시 작성하지 마세요.
+- 분석에 없는 사실을 지어내지 마세요.
+
+[개선 제안 작성 규칙]:
+- '개선 제안'의 각 항목은 문제 위치(라인 번호 또는 식별자)와 문제 코드 1줄을 명시하세요.
+- 각 항목은 다음 형식으로 작성하세요:
+  * [위치] 문제 코드
+    - 문제점: 왜 문제인지 기술
+    - 개선 방향: 변경 방법 및 짧은 대체 코드 제시`;
+}
+
+export function buildReportUserPrompt(input: {
+  filename: string;
   sourceCode: string;
-  filesContext: string;
-  implPath: string;
+  analysisJson: string;
   instruction?: string;
 }): string {
-  const goal =
-    input.action === AGENT_ACTION.optimize
-      ? "구현만 최적화하세요. 공개 API와 동작을 유지하고, 불필요한 반복/복사/비효율을 줄이세요."
-      : "구현만 리팩터링하세요. 가독성과 구조를 개선하고 공개 API와 동작은 유지하세요.";
-
-  return `${goal}
-테스트 파일은 절대 수정하지 마세요. ${input.implPath}만 출력하세요.
+  return `파일: ${input.filename}
+분석 모델: ${REVIEW_PIPELINE_MODELS.analyzer}
+리포트 모델: ${REVIEW_PIPELINE_MODELS.reporter}
 ${input.instruction ? `\n추가 지시:\n${input.instruction}\n` : ""}
-원본:
+기술 분석:
+${input.analysisJson}
+
+원본 코드:
 \`\`\`ts
 ${input.sourceCode}
 \`\`\`
 
-현재 파일:
-${input.filesContext}
-
-JSON files 배열만 출력하세요.`;
-}
-
-export function buildPatchPrompt(input: {
-  filesContext: string;
-  failMessage: string;
-  stackExcerpt: string;
-  strategy: PatchStrategy;
-  lockKind: "impl" | "test";
-}): string {
-  const strategyHint =
-    input.strategy === "rewrite"
-      ? "같은 실패가 반복되었습니다. 대상 파일을 처음부터 다시 작성하세요."
-      : "실패한 부분만 최소로 수정하세요.";
-
-  const lockHint =
-    input.lockKind === "impl"
-      ? "구현 파일은 수정하지 마세요. 테스트 파일만 고치세요."
-      : "테스트 파일은 수정하지 마세요. 구현 파일만 고치세요.";
-
-  return `${strategyHint}
-${lockHint}
-
-현재 파일:
-${input.filesContext}
-
-실패 요약:
-${input.failMessage}
-
-스택:
-${input.stackExcerpt}
-
-JSON files 배열만 출력하세요.`;
-}
-
-export function buildJsonRetryPrompt(): string {
-  return `이전 응답은 JSON이 아닙니다. {"files":[{"path":"...","content":"..."}]} 만 출력하세요. 다른 텍스트는 넣지 마세요.`;
+최종 코드리뷰 리포트를 작성하세요.`;
 }
